@@ -127,7 +127,7 @@ SillyTavern/
 1. 打开仓库页面：
 
 ```text
-https://github.com/Asobi-123/archive-reserve
+https://github.com/yangzq1113/archive-reserve
 ```
 
 2. 点击绿色 `Code` 按钮。
@@ -204,7 +204,7 @@ http://127.0.0.1:8000/api/plugins/archive-reserve/ui
 如果还不放心，再检查一次目录：
 
 ```text
-SillyTavern/plugins/archive-reserve/index.js
+SillyTavern/plugins/yangzq1113/index.js
 SillyTavern/plugins/archive-reserve/package.json
 SillyTavern/plugins/archive-reserve/public/index.html
 ```
