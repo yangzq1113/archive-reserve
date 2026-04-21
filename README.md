@@ -94,7 +94,7 @@ data/
 4. 执行：
 
 ```bash
-git clone https://github.com/Asobi-123/archive-reserve.git
+git clone https://github.com/yangzq1113/archive-reserve.git
 ```
 
 5. 进入插件目录：
