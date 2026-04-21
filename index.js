@@ -36,6 +36,9 @@ const CHUNK_ASSET_PREFIX = 'archive-reserve.chunk.';
 const SECOND_LEVEL_CHUNK_ROOTS = new Set(['chats', 'assets', 'extensions', 'vectors', 'thumbnails']);
 const USER_THIRD_LEVEL_CHUNK_ROOTS = new Set(['images', 'files']);
 const CHUNK_GC_GRACE_MS = 6 * 60 * 60 * 1000;
+const MAX_CHUNKS_PER_BACKUP = 300;
+const CHUNK_CLEANUP_THRESHOLD = 700;
+const CHUNK_SAFE_LIMIT = 600;
 const SPLIT_THRESHOLD_BYTES = 1800 * 1024 * 1024;
 const GITHUB_API_ROOT = 'https://api.github.com';
 const RETRYABLE_FETCH_ERROR_CODES = new Set([
@@ -1981,10 +1984,28 @@ async function runBackupJob(config, options = {}) {
         const chunkGroups = buildChunkGroups(collection);
         setOperationState('正在准备分块仓库');
         const repoState = await ensureRepositoryReady(config);
-        const storeRelease = await ensureChunkStoreRelease(config, repoState);
+        let storeRelease = await ensureChunkStoreRelease(config, repoState);
+        let storeAssetCount = (storeRelease.assets || []).length;
+        if (storeAssetCount > CHUNK_CLEANUP_THRESHOLD) {
+            setOperationState('正在清理多余分块');
+            await pruneChunkStoreAssets(config);
+            storeRelease = await refreshChunkStoreRelease(config);
+            storeAssetCount = (storeRelease.assets || []).length;
+            while (storeAssetCount > CHUNK_SAFE_LIMIT) {
+                const result = await aggressivePruneChunkStore(config);
+                if (result.deletedCount === 0) {
+                    break;
+                }
+                storeRelease = await refreshChunkStoreRelease(config);
+                storeAssetCount = (storeRelease.assets || []).length;
+            }
+        }
         const chunkResults = [];
 
         for (const [index, group] of chunkGroups.entries()) {
+            if (chunkResults.length >= MAX_CHUNKS_PER_BACKUP) {
+                break;
+            }
             const progress = (label) => {
                 setOperationState(label, {
                     current: index + 1,
@@ -2201,6 +2222,46 @@ async function pruneChunkStoreAssets(config) {
         deletedBytes: reclaimableAssets.reduce((sum, asset) => sum + (Number(asset.size) || 0), 0),
         protectedCount: protectedAssets.length,
         protectedBytes: protectedAssets.reduce((sum, asset) => sum + (Number(asset.size) || 0), 0),
+    };
+}
+
+async function aggressivePruneChunkStore(config) {
+    let storeRelease;
+    try {
+        storeRelease = await getReleaseByTag(config, CHUNK_STORE_TAG);
+    } catch (error) {
+        if (error.statusCode === 404) {
+            return { deletedCount: 0, deletedBytes: 0 };
+        }
+        throw error;
+    }
+
+    const backups = await listBackupReleases(config);
+    const referencedAssetNames = await collectReferencedChunkAssetNames(config, backups);
+    const orphanAssets = (storeRelease.assets || []).filter((asset) => !referencedAssetNames.has(asset.name));
+    const protectedAssets = orphanAssets.filter(isChunkAssetGraceProtected);
+    const reclaimableAssets = orphanAssets.filter((asset) => !isChunkAssetGraceProtected(asset));
+
+    const sortedReclaimable = reclaimableAssets.slice().sort((a, b) => (Number(a.size) || 0) - (Number(b.size) || 0));
+    const safeToDelete = [];
+    let accumulatedBytes = 0;
+
+    for (const asset of sortedReclaimable) {
+        const newCount = (storeRelease.assets || []).length - safeToDelete.length - 1;
+        if (newCount <= CHUNK_SAFE_LIMIT) {
+            break;
+        }
+        safeToDelete.push(asset);
+        accumulatedBytes += Number(asset.size) || 0;
+    }
+
+    for (const asset of safeToDelete) {
+        await deleteReleaseAsset(config, asset.id);
+    }
+
+    return {
+        deletedCount: safeToDelete.length,
+        deletedBytes: accumulatedBytes,
     };
 }
 
